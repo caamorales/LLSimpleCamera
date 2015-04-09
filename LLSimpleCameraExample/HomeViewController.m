@@ -12,6 +12,7 @@
 
 @interface HomeViewController ()
 @property (strong, nonatomic) LLSimpleCamera *camera;
+@property (strong, nonatomic) UILabel *errorLabel;
 @property (strong, nonatomic) UIButton *snapButton;
 @property (strong, nonatomic) UIButton *switchButton;
 @property (strong, nonatomic) UIButton *flashButton;
@@ -22,24 +23,68 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
 
-    self.view.backgroundColor = [UIColor redColor];
+    self.view.backgroundColor = [UIColor blackColor];
     [self.navigationController setNavigationBarHidden:YES animated:NO];
     
     CGRect screenRect = [[UIScreen mainScreen] bounds];
     
+    // ----- initialize camera -------- //
+    
     // create camera vc
-    self.camera = [[LLSimpleCamera alloc] initWithQuality:CameraQualityPhoto];
+    self.camera = [[LLSimpleCamera alloc] initWithQuality:CameraQualityPhoto andPosition:CameraPositionBack];
     
-    // attach to the view and assign a delegate
-    [self.camera attachToViewController:self withDelegate:self];
-    
-    // set the camera view frame to size and origin required for your app
-    self.camera.view.frame = CGRectMake(0, 0, screenRect.size.width, screenRect.size.height);
+    // attach to a view controller
+    [self.camera attachToViewController:self withFrame:CGRectMake(0, 0, screenRect.size.width, screenRect.size.height)];
     
     // read: http://stackoverflow.com/questions/5427656/ios-uiimagepickercontroller-result-image-orientation-after-upload
     // you probably will want to set this to YES, if you are going view the image outside iOS.
     self.camera.fixOrientationAfterCapture = NO;
     
+    // take the required actions on a device change
+    __weak typeof(self) weakSelf = self;
+    [self.camera setOnDeviceChange:^(LLSimpleCamera *camera, AVCaptureDevice * device) {
+        
+        NSLog(@"Device changed.");
+        
+        // device changed, check if flash is available
+        if([camera isFlashAvailable]) {
+            weakSelf.flashButton.hidden = NO;
+            
+            if(camera.flash == CameraFlashOff) {
+                weakSelf.flashButton.selected = NO;
+            }
+            else {
+                weakSelf.flashButton.selected = YES;
+            }
+        }
+        else {
+            weakSelf.flashButton.hidden = YES;
+        }
+    }];
+    
+    [self.camera setOnError:^(LLSimpleCamera *camera, NSError *error) {
+        NSLog(@"Camera error: %@", error);
+        
+        if([error.domain isEqualToString:LLSimpleCameraErrorDomain]) {
+            if(error.code == LLSimpleCameraErrorCodePermission) {
+                if(weakSelf.errorLabel)
+                    [weakSelf.errorLabel removeFromSuperview];
+                
+                UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+                label.text = @"We need permission for the camera.\nPlease go to your settings.";
+                label.numberOfLines = 2;
+                label.lineBreakMode = NSLineBreakByWordWrapping;
+                label.backgroundColor = [UIColor clearColor];
+                label.font = [UIFont fontWithName:@"AvenirNext-DemiBold" size:13.0f];
+                label.textColor = [UIColor whiteColor];
+                label.textAlignment = NSTextAlignmentCenter;
+                [label sizeToFit];
+                label.center = CGPointMake(screenRect.size.width / 2.0f, screenRect.size.height / 2.0f);
+                weakSelf.errorLabel = label;
+                [weakSelf.view addSubview:weakSelf.errorLabel];
+            }
+        }
+    }];
     
     // ----- camera buttons -------- //
     
@@ -81,49 +126,53 @@
     [self.camera start];
 }
 
-/* camera buttons */
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+
+    // stop the camera
+    [self.camera stop];
+}
+
+/* camera button methods */
+
 - (void)switchButtonPressed:(UIButton *)button {
     [self.camera togglePosition];
 }
 
 - (void)flashButtonPressed:(UIButton *)button {
     
-    CameraFlash flash = [self.camera toggleFlash];
-    if(flash == CameraFlashOn) {
-        self.flashButton.selected = YES;
+    if(self.camera.flash == CameraFlashOff) {
+        BOOL done = [self.camera updateFlashMode:CameraFlashOn];
+        if(done) {
+            self.flashButton.selected = YES;
+        }
     }
     else {
-        self.flashButton.selected = NO;
+        BOOL done = [self.camera updateFlashMode:CameraFlashOff];
+        if(done) {
+            self.flashButton.selected = NO;
+        }
     }
 }
 
 - (void)snapButtonPressed:(UIButton *)button {
     
-    // capture the image, delegate will be executed
-    [self.camera capture];
-}
-
-/* camera delegates */
-- (void)cameraViewController:(LLSimpleCamera *)cameraVC didCaptureImage:(UIImage *)image {
-    
-    // we should stop the camera, since we don't need it anymore. We will open a new vc.
-    [self.camera stop];
-    
-    ImageViewController *imageVC = [[ImageViewController alloc] initWithImage:image];
-    [self presentViewController:imageVC animated:NO completion:nil];
-}
-
-- (void)cameraViewController:(LLSimpleCamera *)cameraVC didChangeDevice:(AVCaptureDevice *)device {
-    
-    // device changed, check if flash is available
-    if(cameraVC.isFlashAvailable) {
-        self.flashButton.hidden = NO;
-    }
-    else {
-        self.flashButton.hidden = YES;
-    }
-    
-    self.flashButton.selected = NO;
+    // capture
+    [self.camera capture:^(LLSimpleCamera *camera, UIImage *image, NSDictionary *metadata, NSError *error) {
+        if(!error) {
+            
+            // we should stop the camera, since we don't need it anymore. We will open a new vc.
+            // this very important, otherwise you may experience memory crashes
+            [camera stop];
+            
+            // show the image
+            ImageViewController *imageVC = [[ImageViewController alloc] initWithImage:image];
+            [self presentViewController:imageVC animated:NO completion:nil];
+        }
+        else {
+            NSLog(@"An error has occured: %@", error);
+        }
+    } exactSeenImage:YES];
 }
 
 /* other lifecycle methods */
